@@ -237,6 +237,21 @@
   .footer-socials{display:flex;gap:16px;font-size:12px;font-weight:600;text-transform:uppercase;margin-bottom:20px;}
   .footer-socials a{text-decoration:none;color:#ffffff;}
   footer .fine{font-size:11px;color:#B8B8B8;line-height:1.7;border-top:1px solid #3A3A3A;padding-top:16px;font-family:Arial,sans-serif;}
+
+  /* ---------- write-in input ---------- */
+  .write-in-row{display:flex;gap:8px;margin-top:2px;}
+  .write-in-input{
+    flex:1;border:1.5px solid #16234B;padding:9px 10px;
+    font-family:Arial,sans-serif;font-size:13px;color:#111111;
+    min-width:0;
+  }
+  .write-in-input:disabled{background:#F5F4F0;color:#8A8D94;}
+  .write-in-btn{
+    background:#D91E2B;color:#ffffff;border:none;
+    padding:9px 14px;font-weight:700;font-size:12px;letter-spacing:0.06em;text-transform:uppercase;
+    font-family:'Anton',sans-serif;flex-shrink:0;
+  }
+  .write-in-btn:disabled{background:#D8D5CC;color:#8A8D94;}
 </style>
 </head>
 <body>
@@ -439,11 +454,6 @@
     a.addEventListener('click', function(){ menuPanel.classList.remove('open'); });
   });
 
-  var CANDIDATES = [
-    { id: 'hue',   name: 'Hue Money' },
-    { id: 'other', name: 'Write-In / Other' }
-  ];
-
   var VOTE_API = '/api/vote';
   var VOTED_KEY = 'my-vote-huemoney';
   var VOTER_ID_KEY = 'voter-id-huemoney';
@@ -452,13 +462,8 @@
   var pollMeta = document.getElementById('pollMeta');
   var lockedNote = document.getElementById('lockedNote');
 
-  var state = { votes: {}, myVote: null };
-
-  function seedVotes(){
-    var v = {};
-    CANDIDATES.forEach(function(c){ v[c.id] = 0; });
-    return v;
-  }
+  // votes shape from server: { hue, writein, writeinOther, promoted: [{name,count}] }
+  var state = { votes: { hue: 0, writein: 0, writeinOther: 0, promoted: [] }, myVote: null };
 
   function getVoterId(){
     var id = localStorage.getItem(VOTER_ID_KEY);
@@ -470,31 +475,100 @@
   }
 
   function totalVotes(){
-    return CANDIDATES.reduce(function(sum,c){ return sum + (state.votes[c.id]||0); }, 0);
+    return (state.votes.hue || 0) + (state.votes.writein || 0);
+  }
+
+  function escapeHtml(s){
+    return String(s).replace(/[&<>"']/g, function(c){
+      return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c];
+    });
+  }
+
+  function candidateRow(opts){
+    // opts: { name, count, total, isMine, isLocked, dataId, writeInName }
+    var pct = opts.total > 0 ? Math.round((opts.count / opts.total) * 100) : 0;
+    var isLeader = opts.isLeader;
+    var html = ''
+      + '<div class="candidate' + (isLeader ? ' leader' : '') + '">'
+      +   '<div class="cand-top">'
+      +     '<span class="cand-name">' + escapeHtml(opts.name) + '</span>'
+      +     '<span class="cand-pct">' + pct + '%</span>'
+      +   '</div>'
+      +   '<div class="bar-track"><div class="bar-fill" style="width:' + pct + '%"></div></div>';
+
+    if (opts.isMine){
+      html += '<button class="vote-btn voted-btn" disabled>✓ Your Vote</button>';
+    } else if (opts.isLocked){
+      html += '<button class="vote-btn" disabled>Voting Closed</button>';
+    } else if (opts.dataId){
+      html += '<button class="vote-btn" data-id="' + opts.dataId + '"' + (opts.writeInName ? ' data-writein-name="' + escapeHtml(opts.writeInName) + '"' : '') + '>Vote ' + escapeHtml(opts.name) + '</button>';
+    }
+
+    html += '</div>';
+    return html;
   }
 
   function render(){
     var total = totalVotes();
-    var maxCount = Math.max.apply(null, CANDIDATES.map(function(c){return state.votes[c.id]||0;}));
+    var isLocked = !!state.myVote;
+    var hueCount = state.votes.hue || 0;
+    var promoted = state.votes.promoted || [];
+    var otherCount = state.votes.writeinOther || 0;
+
+    // figure out the leader among all rows (hue, each promoted name, and the "other" bucket)
+    var counts = [hueCount].concat(promoted.map(function(p){ return p.count; })).concat([otherCount]);
+    var maxCount = Math.max.apply(null, counts);
 
     var html = '';
-    CANDIDATES.forEach(function(c){
-      var count = state.votes[c.id] || 0;
-      var pct = total > 0 ? Math.round((count/total)*100) : 0;
-      var isLeader = total > 0 && count === maxCount && maxCount > 0;
-      var isMine = state.myVote === c.id;
-      html += ''
-        + '<div class="candidate' + (isLeader ? ' leader' : '') + '">'
-        +   '<div class="cand-top">'
-        +     '<span class="cand-name">' + c.name + '</span>'
-        +     '<span class="cand-pct">' + pct + '%</span>'
-        +   '</div>'
-        +   '<div class="bar-track"><div class="bar-fill" style="width:' + pct + '%"></div></div>'
-        +   '<button class="vote-btn' + (isMine ? ' voted-btn' : '') + '" data-id="' + c.id + '" ' + (state.myVote ? 'disabled' : '') + '>'
-        +     (isMine ? '✓ Your Vote' : (state.myVote ? 'Voting Closed' : 'Vote ' + c.name))
-        +   '</button>'
-        + '</div>';
+
+    html += candidateRow({
+      name: 'Hue Money',
+      count: hueCount,
+      total: total,
+      isLeader: total > 0 && hueCount === maxCount,
+      isMine: state.myVote === 'hue',
+      isLocked: isLocked,
+      dataId: 'hue'
     });
+
+    promoted.forEach(function(p){
+      var isMine = state.myVote === 'writein' && state.myWriteInName === p.name;
+      html += candidateRow({
+        name: p.name,
+        count: p.count,
+        total: total,
+        isLeader: total > 0 && p.count === maxCount,
+        isMine: isMine,
+        isLocked: isLocked,
+        dataId: isMine ? null : 'writein',
+        writeInName: p.name
+      });
+    });
+
+    // generic write-in bucket, always shown (even at 0) as the place to submit a new name
+    var isMineOther = state.myVote === 'writein' && !promoted.some(function(p){ return p.name === state.myWriteInName; });
+    html += candidateRow({
+      name: 'Write-In / Other',
+      count: otherCount,
+      total: total,
+      isLeader: total > 0 && otherCount === maxCount && otherCount > 0,
+      isMine: false,
+      isLocked: false,
+      dataId: null
+    });
+
+    if (isMineOther && state.myWriteInName){
+      html += '<div class="poll-locked-note" style="margin-top:-8px;margin-bottom:12px;text-align:left;">Your write-in vote: <strong>' + escapeHtml(state.myWriteInName) + '</strong></div>';
+    } else if (isLocked){
+      html += '<button class="vote-btn" disabled style="margin-top:-4px;">Voting Closed</button>';
+    } else {
+      html += ''
+        + '<div class="write-in-row">'
+        +   '<input class="write-in-input" id="writeInInput" type="text" placeholder="Type a name…" maxlength="40">'
+        +   '<button class="write-in-btn" id="writeInSubmit">Vote</button>'
+        + '</div>';
+    }
+
     pollBody.innerHTML = html;
 
     pollMeta.textContent = total.toLocaleString() + (total === 1 ? ' vote' : ' votes');
@@ -506,9 +580,26 @@
       lockedNote.style.display = 'none';
     }
 
-    Array.prototype.forEach.call(pollBody.querySelectorAll('.vote-btn'), function(btn){
-      btn.addEventListener('click', onVote);
+    Array.prototype.forEach.call(pollBody.querySelectorAll('.vote-btn[data-id]'), function(btn){
+      btn.addEventListener('click', function(e){
+        var id = e.currentTarget.getAttribute('data-id');
+        var name = e.currentTarget.getAttribute('data-writein-name');
+        onVote(id, e.currentTarget, name || undefined);
+      });
     });
+
+    var writeInBtn = document.getElementById('writeInSubmit');
+    if (writeInBtn){
+      writeInBtn.addEventListener('click', function(){
+        var input = document.getElementById('writeInInput');
+        var name = (input.value || '').trim();
+        if (!name){
+          input.focus();
+          return;
+        }
+        onVote('writein', writeInBtn, name);
+      });
+    }
   }
 
   async function fetchTallies(){
@@ -517,37 +608,43 @@
     return await res.json();
   }
 
-  async function submitVote(candidateId){
+  async function submitVote(candidateId, writeInName){
     var res = await fetch(VOTE_API, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ candidateId: candidateId, voterId: getVoterId() })
+      body: JSON.stringify({ candidateId: candidateId, voterId: getVoterId(), writeInName: writeInName })
     });
     var data = await res.json();
     if (!res.ok){
       if (data && data.error === 'already_voted') return data.tallies;
-      throw new Error('Vote failed: ' + res.status);
+      throw new Error(data && data.error ? data.error : ('Vote failed: ' + res.status));
     }
     return data.tallies;
   }
 
-  async function onVote(e){
+  async function onVote(id, btnEl, writeInName){
     if (state.myVote) return;
-    var id = e.currentTarget.getAttribute('data-id');
-    e.currentTarget.disabled = true;
-    e.currentTarget.textContent = 'Voting…';
+    btnEl.disabled = true;
+    var originalText = btnEl.textContent;
+    btnEl.textContent = 'Voting…';
+
+    var input = document.getElementById('writeInInput');
+    if (input) input.disabled = true;
 
     try {
-      var tallies = await submitVote(id);
+      var tallies = await submitVote(id, writeInName);
       state.votes = tallies;
       localStorage.setItem(VOTED_KEY, id);
+      if (writeInName) localStorage.setItem(VOTED_KEY + '-name', writeInName);
       state.myVote = id;
+      state.myWriteInName = writeInName;
       render();
     } catch (err) {
       console.error('Vote failed:', err);
       pollMeta.textContent = "Couldn't record your vote — try again.";
-      e.currentTarget.disabled = false;
-      e.currentTarget.textContent = 'Vote ' + (CANDIDATES.find(function(c){return c.id===id;})||{}).name;
+      btnEl.disabled = false;
+      btnEl.textContent = originalText;
+      if (input) input.disabled = false;
     }
   }
 
@@ -556,11 +653,11 @@
       state.votes = await fetchTallies();
     } catch (err) {
       console.error('Could not load live results:', err);
-      state.votes = seedVotes();
       pollMeta.textContent = "Couldn't load live results.";
     }
 
     state.myVote = localStorage.getItem(VOTED_KEY);
+    state.myWriteInName = localStorage.getItem(VOTED_KEY + '-name');
     render();
   }
 
